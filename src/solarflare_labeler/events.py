@@ -26,7 +26,10 @@ class EventMatcher:
 
     def _load_catalog(self, path: str | Path) -> pd.DataFrame:
         # Read the CSV and automatically parse date columns into datetime objects
-        df = pd.read_csv(path, parse_dates=["start_time", "peak_time"])
+        df = pd.read_csv(path)
+        df = df.rename(columns={"peak": "peak_time", "start": "start_time", "class": "goes_class"})
+        df["peak_time"] = pd.to_datetime(df["peak_time"])
+        df["start_time"] = pd.to_datetime(df["start_time"])
 
         # Sort by peak_time so we can do fast lookups later
         df = df.sort_values("peak_time").reset_index(drop=True)
