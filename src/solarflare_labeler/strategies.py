@@ -5,10 +5,13 @@ _classifier = FlareClassifier()
 
 
 class BinaryThresholdStrategy:
-    """Returns 1 if any flare in the window is M-class or stronger, else 0."""
+    """Returns 1 if any flare in the window meets or exceeds the threshold class, else 0."""
+
+    def __init__(self, threshold: str = "M"):
+        self.threshold = threshold
 
     def label(self, flares: list[FlareEvent]) -> int:
-        return int(any(_classifier.is_strong(f.goes_class) for f in flares))
+        return int(any(_classifier.is_strong(f.goes_class, self.threshold) for f in flares))
 
 
 class MaxFlareStrategy:
