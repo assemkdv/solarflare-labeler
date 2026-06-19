@@ -1,5 +1,5 @@
 import pandas as pd
-from solarflare_labeler.strategies import BinaryThresholdStrategy
+from solarflare_labeler.strategies import BinaryThresholdStrategy, MaxFlareStrategy
 from solarflare_labeler.events import FlareEvent
 
 
@@ -35,3 +35,19 @@ def test_binary_threshold_no_qualifying_flares_gives_zero():
     strategy = BinaryThresholdStrategy()
     assert strategy.label([_flare("B1.0"), _flare("C4.0")]) == 0
     assert strategy.label([]) == 0
+
+
+def test_max_flare_empty_list_returns_zero():
+    strategy = MaxFlareStrategy()
+    assert strategy.label([]) == 0.0
+
+
+def test_max_flare_single_flare_returns_its_flux():
+    strategy = MaxFlareStrategy()
+    assert strategy.label([_flare("M2.3")]) == 2.3e-5
+
+
+def test_max_flare_multiple_flares_returns_max_flux():
+    strategy = MaxFlareStrategy()
+    flares = [_flare("C4.0"), _flare("X1.0"), _flare("M2.3")]
+    assert strategy.label(flares) == 1e-4
