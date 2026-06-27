@@ -1,0 +1,2 @@
+include tests/fixtures/*.csv
+include data/*.csv
