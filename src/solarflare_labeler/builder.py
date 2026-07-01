@@ -10,25 +10,55 @@ class DatasetBuilder:
     Parameters
     ----------
     prediction_window : int
-        Hours after each image timestamp to search for flares.
+        Hours after each image timestamp (or, for sequences, after the
+        final image in the sequence) to search for flares.
     strategy : BinaryThresholdStrategy | MaxFlareStrategy
         Labeling strategy that converts a list of FlareEvents to a label.
+    sequence_length : int
+        Number of consecutive images per sample. 1 (default) preserves the
+        original single-image behavior and output schema exactly.
+    stride : int
+        Step size between the start of consecutive sequences. Only used
+        when sequence_length > 1.
+    cadence_minutes : int | None
+        Expected number of minutes between consecutive images inside a
+        sequence. When set, a candidate sequence is skipped (not raised on)
+        if any adjacent pair inside it doesn't differ by exactly this many
+        minutes. Only used when sequence_length > 1.
     """
 
-    def __init__(self, prediction_window, strategy):
+    def __init__(self, prediction_window, strategy, sequence_length=1, stride=1, cadence_minutes=None):
+        if sequence_length < 1:
+            raise ValueError(f"sequence_length must be >= 1, got {sequence_length}")
+        if stride < 1:
+            raise ValueError(f"stride must be >= 1, got {stride}")
+        if cadence_minutes is not None and cadence_minutes <= 0:
+            raise ValueError(f"cadence_minutes must be > 0, got {cadence_minutes}")
+
         self.prediction_window = prediction_window
         self.strategy = strategy
+        self.sequence_length = sequence_length
+        self.stride = stride
+        self.cadence_minutes = cadence_minutes
 
     def build(self, image_index_path: str | Path, event_catalog_path: str | Path) -> pd.DataFrame:
         """
         Build a labeled dataset.
 
-        Returns a DataFrame with columns:
-            timestamp  - image timestamp (pd.Timestamp)
-            label      - label produced by the strategy
+        For sequence_length == 1 (default), returns a DataFrame with columns
+        (timestamp, label) -- identical to v0.1.0 behavior. An image index
+        with a header row but zero data rows is valid and produces an empty
+        result with the same columns.
 
-        An image index with a header row but zero data rows is valid and
-        produces an empty result with the same (timestamp, label) columns.
+        For sequence_length > 1, returns one row per sequence with columns
+        (sequence_start, sequence_end, timestamps, n_images, label), plus
+        one additional list-column per any other column present in the
+        image index (e.g. an image path or ID column), preserving that
+        column's values for each image in the sequence. Timestamps must be
+        sorted ascending and contain no duplicates in this mode. Fewer rows
+        than sequence_length produces an empty result with the same
+        (sequence-mode) columns.
+
         A completely empty image index (no header) raises ValueError, as
         does an image index missing the required timestamp column.
         """
@@ -46,12 +76,20 @@ class DatasetBuilder:
                 f"Image index at {image_index_path} is missing required column: timestamp"
             )
 
-        timestamps = pd.to_datetime(index_df["timestamp"])
+        index_df = index_df.copy()
+        index_df["timestamp"] = pd.to_datetime(index_df["timestamp"])
 
         matcher = EventMatcher(event_catalog_path)
 
+        if self.sequence_length == 1:
+            return self._build_single_image(index_df, matcher)
+
+        self._validate_sequence_timestamps(index_df["timestamp"], image_index_path)
+        return self._build_sequences(index_df, matcher)
+
+    def _build_single_image(self, index_df: pd.DataFrame, matcher: EventMatcher) -> pd.DataFrame:
         records = []
-        for ts in timestamps:
+        for ts in index_df["timestamp"]:
             flares = matcher.query(ts, self.prediction_window)
             label = self.strategy.label(flares)
             records.append({"timestamp": ts, "label": label})
@@ -59,3 +97,61 @@ class DatasetBuilder:
         if not records:
             return pd.DataFrame(columns=["timestamp", "label"])
         return pd.DataFrame(records)
+
+    def _validate_sequence_timestamps(self, timestamps: pd.Series, path: Path) -> None:
+        if not timestamps.is_monotonic_increasing:
+            raise ValueError(
+                f"Image index at {path} must have timestamps sorted in ascending "
+                "order to build sequences."
+            )
+
+        duplicated = timestamps[timestamps.duplicated()]
+        if not duplicated.empty:
+            dupe_list = ", ".join(str(t) for t in duplicated.unique())
+            raise ValueError(
+                f"Image index at {path} contains duplicate timestamp(s): {dupe_list}"
+            )
+
+    def _sequence_violates_cadence(self, window_timestamps: list) -> bool:
+        if self.cadence_minutes is None:
+            return False
+        expected_gap = pd.Timedelta(minutes=self.cadence_minutes)
+        for earlier, later in zip(window_timestamps, window_timestamps[1:]):
+            if (later - earlier) != expected_gap:
+                return True
+        return False
+
+    def _build_sequences(self, index_df: pd.DataFrame, matcher: EventMatcher) -> pd.DataFrame:
+        timestamps = index_df["timestamp"].tolist()
+        extra_columns = [c for c in index_df.columns if c != "timestamp"]
+        n = len(timestamps)
+        length = self.sequence_length
+
+        columns = ["sequence_start", "sequence_end", "timestamps", "n_images", "label"] + extra_columns
+
+        records = []
+        start = 0
+        while start + length <= n:
+            window = timestamps[start:start + length]
+
+            if not self._sequence_violates_cadence(window):
+                sequence_end = window[-1]
+                flares = matcher.query(sequence_end, self.prediction_window)
+                label = self.strategy.label(flares)
+
+                record = {
+                    "sequence_start": window[0],
+                    "sequence_end": sequence_end,
+                    "timestamps": list(window),
+                    "n_images": len(window),
+                    "label": label,
+                }
+                for col in extra_columns:
+                    record[col] = index_df[col].iloc[start:start + length].tolist()
+                records.append(record)
+
+            start += self.stride
+
+        if not records:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame(records)[columns]

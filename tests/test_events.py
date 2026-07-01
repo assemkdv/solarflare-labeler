@@ -47,13 +47,108 @@ def test_load_catalog_does_not_print(tmp_path, capsys):
     catalog_path = tmp_path / "catalog.csv"
     catalog_path.write_text(
         "date,start,peak,end,class,active_region\n"
-        "2024-01-01,2024-01-01T00:20:00,2024-01-01T00:30:00,2024-01-01T00:40:00,M2.3,4456\n"
+        "2024-01-01,0020,0030,0040,M2.3,4456\n"
     )
 
     EventMatcher(catalog_path)
 
     captured = capsys.readouterr()
     assert captured.out == ""
+
+
+def test_load_catalog_parses_hhmm_with_date(tmp_path):
+    # The exact scraper example row: NOAA-style bare HHMM times combined
+    # with the date column, not a full ISO timestamp per field.
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,0309,0331,0338,M5.1,3559\n"
+    )
+
+    matcher = EventMatcher(catalog_path)
+
+    assert matcher._catalog.loc[0, "peak_time"] == pd.Timestamp("2024-01-23 03:31:00")
+    assert matcher._catalog.loc[0, "start_time"] == pd.Timestamp("2024-01-23 03:09:00")
+
+
+def test_load_catalog_never_reproduces_1970_epoch_bug(tmp_path):
+    # Regression test: pd.to_datetime() called directly on a bare HHMM value
+    # like 331 used to be misread as a Unix timestamp near 1970-01-01.
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,0309,0331,0338,M5.1,3559\n"
+    )
+
+    matcher = EventMatcher(catalog_path)
+
+    assert matcher._catalog.loc[0, "peak_time"].year == 2024
+
+
+def test_load_catalog_parses_midnight(tmp_path):
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,0000,0000,0005,C1.0,3559\n"
+    )
+
+    matcher = EventMatcher(catalog_path)
+
+    assert matcher._catalog.loc[0, "peak_time"] == pd.Timestamp("2024-01-23 00:00:00")
+
+
+def test_load_catalog_rejects_invalid_hour(tmp_path):
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,2460,0331,0338,M5.1,3559\n"
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        EventMatcher(catalog_path)
+
+    message = str(excinfo.value)
+    assert "2460" in message
+    assert str(catalog_path) in message
+
+
+def test_load_catalog_rejects_invalid_minute(tmp_path):
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,0309,1267,0338,M5.1,3559\n"
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        EventMatcher(catalog_path)
+
+    assert "1267" in str(excinfo.value)
+
+
+def test_load_catalog_rejects_non_numeric_time(tmp_path):
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,0309,abc,0338,M5.1,3559\n"
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        EventMatcher(catalog_path)
+
+    assert "abc" in str(excinfo.value)
+
+
+def test_load_catalog_rejects_missing_time_value(tmp_path):
+    catalog_path = tmp_path / "catalog.csv"
+    catalog_path.write_text(
+        "date,start,peak,end,class,active_region\n"
+        "2024-01-23,0309,,0338,M5.1,3559\n"
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        EventMatcher(catalog_path)
+
+    assert "missing" in str(excinfo.value).lower()
 
 
 def test_load_catalog_missing_one_required_column(tmp_path):
