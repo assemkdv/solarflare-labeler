@@ -96,6 +96,72 @@ def test_end_to_end_sequences_against_real_fixture_catalog(tmp_path):
     assert max_result["label"].tolist() == [0.0, 0.0, 3e-6]
 
 
+def test_end_to_end_active_region_against_real_fixture_catalog(tmp_path):
+    # tests/fixtures/catalog.csv has two active regions: 11111 (C3.0, X1.0
+    # on 2024-02-01/02) and 22222 (C1.0, M4.0 on 2024-02-05). Using
+    # threshold="C" so C-class flares count as qualifying.
+    index_path = tmp_path / "ar_index.csv"
+    pd.DataFrame({
+        "timestamp": pd.to_datetime([
+            "2024-02-01T00:00:00",  # region 11111, correct -> catches C3.0
+            "2024-02-05T00:00:00",  # region 11111, wrong that day -> nothing
+            "2024-02-05T00:00:00",  # region 22222, correct -> catches C1.0/M4.0
+        ]),
+        "active_region": ["11111", "11111", "22222"],
+    }).to_csv(index_path, index=False)
+
+    builder = DatasetBuilder(
+        prediction_window=24,
+        strategy=BinaryThresholdStrategy(threshold="C"),
+        target="active_region",
+    )
+    result = builder.build(index_path, CATALOG_PATH)
+
+    assert list(result.columns) == ["timestamp", "label"]
+    assert result["label"].tolist() == [1, 0, 1]
+
+
+def test_end_to_end_active_region_sequences_against_real_fixture_catalog(tmp_path):
+    # tests/fixtures/catalog.csv has region 11111 (C3.0 peak 2024-02-01T12:00,
+    # X1.0 peak 2024-02-02T00:00) and region 22222 (C1.0/M4.0 on 2024-02-05).
+    # Using threshold="C" so C-class flares count as qualifying.
+    index_path = tmp_path / "ar_sequence_index.csv"
+    pd.DataFrame({
+        "timestamp": pd.to_datetime([
+            "2024-02-01T11:00:00",
+            "2024-02-01T11:30:00",
+            "2024-02-01T12:00:00",
+            "2024-02-05T09:00:00",
+            "2024-02-05T09:30:00",
+            "2024-02-05T10:00:00",
+        ]),
+        "active_region": ["11111", "11111", "11111", "22222", "22222", "22222"],
+    }).to_csv(index_path, index=False)
+
+    builder = DatasetBuilder(
+        prediction_window=1,
+        strategy=BinaryThresholdStrategy(threshold="C"),
+        target="active_region",
+        sequence_length=3,
+        stride=3,
+        cadence_minutes=30,
+    )
+    result = builder.build(index_path, CATALOG_PATH)
+
+    assert list(result.columns) == [
+        "sequence_start", "sequence_end", "timestamps", "n_images", "active_region", "label"
+    ]
+    assert result["sequence_end"].tolist() == [
+        pd.Timestamp("2024-02-01T12:00:00"),
+        pd.Timestamp("2024-02-05T10:00:00"),
+    ]
+    # First sequence ends exactly at region 11111's C3.0 peak -> label 1.
+    # Second sequence's 1-hour window from 10:00 catches no region-22222
+    # flare (C1.0 peaked at 06:00, M4.0 peaks later at 18:00) -> label 0.
+    assert result["label"].tolist() == [1, 0]
+    assert result["active_region"].tolist() == ["11111", "22222"]
+
+
 @pytest.mark.skip(
     reason="data/solar_events.csv still uses the legacy ISO-datetime format "
     "for start/peak/end and hasn't been migrated to the real date+HHMM "

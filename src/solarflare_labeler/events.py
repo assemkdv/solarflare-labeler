@@ -137,12 +137,19 @@ class EventMatcher:
         self,
         image_time: pd.Timestamp,
         prediction_window_hours: int,
+        active_region: str | None = None,
     ) -> list[FlareEvent]:
         """
         Returns all flares whose peak falls inside the prediction window.
 
         Example: image taken at 10:00, window = 24 hours
         → returns all flares with peak_time between 10:00 and 10:00 next day
+
+        If active_region is given, only flares attributed to that exact
+        active region are returned; flares with a missing active_region
+        never match, and flares from any other active region are excluded
+        regardless of strength. If active_region is None (the default),
+        matching is full-disk: any flare in the window counts.
         """
 
         # Calculate the end of the prediction window
@@ -154,6 +161,10 @@ class EventMatcher:
             (self._catalog["peak_time"] >= image_time) &
             (self._catalog["peak_time"] < window_end)
         )
+
+        if active_region is not None:
+            normalized_catalog_ar = self._catalog["active_region"].apply(_normalize_active_region)
+            mask &= normalized_catalog_ar == active_region
 
         # Convert the matching rows into FlareEvent objects and return them
         # If no flares match, this returns an empty list → label will be 0
