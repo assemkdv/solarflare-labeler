@@ -294,6 +294,13 @@ def test_sequences_insufficient_rows_returns_empty(tmp_path):
     assert len(result) == 0
 
 
+def test_prediction_window_must_be_positive():
+    with pytest.raises(ValueError) as excinfo:
+        DatasetBuilder(prediction_window=0, strategy=BinaryThresholdStrategy())
+
+    assert "prediction_window" in str(excinfo.value)
+
+
 def test_sequence_length_must_be_positive():
     with pytest.raises(ValueError) as excinfo:
         DatasetBuilder(prediction_window=24, strategy=BinaryThresholdStrategy(), sequence_length=0)

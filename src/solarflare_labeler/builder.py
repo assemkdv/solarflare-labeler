@@ -44,6 +44,8 @@ class DatasetBuilder:
         cadence_minutes=None,
         target="full_disk",
     ):
+        if prediction_window <= 0:
+            raise ValueError(f"prediction_window must be > 0, got {prediction_window}")
         if sequence_length < 1:
             raise ValueError(f"sequence_length must be >= 1, got {sequence_length}")
         if stride < 1:
