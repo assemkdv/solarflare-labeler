@@ -1,2 +1,3 @@
 include tests/fixtures/*.csv
 include data/*.csv
+prune src/solarflare_labeler.egg-info

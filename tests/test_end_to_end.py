@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from solarflare_labeler.builder import DatasetBuilder
+from solarflare_labeler.events import EventMatcher
 from solarflare_labeler.strategies import BinaryThresholdStrategy, MaxFlareStrategy
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -162,18 +162,24 @@ def test_end_to_end_active_region_sequences_against_real_fixture_catalog(tmp_pat
     assert result["active_region"].tolist() == ["11111", "22222"]
 
 
-@pytest.mark.skip(
-    reason="data/solar_events.csv still uses the legacy ISO-datetime format "
-    "for start/peak/end and hasn't been migrated to the real date+HHMM "
-    "scraper format yet (Phase 12 fixed catalog parsing, not this file's "
-    "content). Re-enable once that file is converted."
-)
 def test_end_to_end_smoke_test_against_real_catalog(tmp_path):
     # Not the main correctness test — labels here aren't hardcoded since
     # the real development catalog can change over time. This just
-    # confirms the full pipeline runs cleanly against actual data.
+    # confirms the full pipeline runs cleanly against actual data, now that
+    # data/solar_events.csv has been converted to the real date+HHMM
+    # scraper format.
     repo_root = Path(__file__).parent.parent
     real_catalog = repo_root / "data" / "solar_events.csv"
+
+    # EventMatcher must be able to load the converted file at all (this
+    # also validates every start/peak/end value is a real 4-digit HHMM
+    # time, since _load_catalog raises ValueError on anything else).
+    matcher = EventMatcher(real_catalog)
+    assert len(matcher._catalog) > 0
+
+    # Regression check: none of the converted peak_times were misparsed
+    # into the ~1970-01-01 Unix-epoch bug this file's format fix addressed.
+    assert (matcher._catalog["peak_time"].dt.year > 2000).all()
 
     index_path = tmp_path / "smoke_index.csv"
     pd.DataFrame({
